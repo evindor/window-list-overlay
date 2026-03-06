@@ -1,0 +1,11 @@
+#!/bin/bash
+# Cancel any pending show
+if [ -f /tmp/window-list-show.pid ]; then
+    kill "$(cat /tmp/window-list-show.pid)" 2>/dev/null
+    rm -f /tmp/window-list-show.pid
+fi
+
+# Signal the daemon to hide immediately
+if [ -f /tmp/window-list-overlay.pid ]; then
+    kill -USR2 "$(cat /tmp/window-list-overlay.pid)" 2>/dev/null
+fi

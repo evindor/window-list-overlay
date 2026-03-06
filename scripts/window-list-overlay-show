@@ -1,0 +1,22 @@
+#!/bin/bash
+# Cancel any pending hide
+if [ -f /tmp/window-list-hide.pid ]; then
+    kill "$(cat /tmp/window-list-hide.pid)" 2>/dev/null
+    rm -f /tmp/window-list-hide.pid
+fi
+
+# Cancel any previous pending show
+if [ -f /tmp/window-list-show.pid ]; then
+    kill "$(cat /tmp/window-list-show.pid)" 2>/dev/null
+    rm -f /tmp/window-list-show.pid
+fi
+
+# Start 200ms debounce timer, then signal the daemon
+(
+    sleep 0.2
+    if [ -f /tmp/window-list-overlay.pid ]; then
+        kill -USR1 "$(cat /tmp/window-list-overlay.pid)" 2>/dev/null
+    fi
+    rm -f /tmp/window-list-show.pid
+) &
+echo $! > /tmp/window-list-show.pid
