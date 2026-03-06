@@ -45,6 +45,9 @@ monitor = ""
 # Overlay position: "right", "left", "top", "bottom"
 position = "right"
 
+# Internal layout: "vertical" (stack top-to-bottom) or "horizontal" (stack left-to-right)
+layout = "vertical"
+
 # Pixels from the anchor edge
 margin = 20
 
@@ -66,6 +69,20 @@ scrolling_only = true
 
 # Truncate window titles after this many characters
 max_title_chars = 50
+```
+
+### Per-monitor overrides
+
+Override `position`, `layout`, `margin`, or `width` for specific monitors:
+
+```toml
+[monitors.DP-1]
+position = "right"
+layout = "horizontal"
+
+[monitors.HDMI-A-1]
+position = "top"
+layout = "vertical"
 ```
 
 ### Theme

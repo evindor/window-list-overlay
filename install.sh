@@ -24,6 +24,7 @@ if [ ! -f "$CONFIG_DIR/config.toml" ]; then
 
 # monitor = ""
 # position = "right"
+# layout = "vertical"
 # margin = 20
 # width = 320
 # icon_size = 24
@@ -32,6 +33,15 @@ if [ ! -f "$CONFIG_DIR/config.toml" ]; then
 # opacity = 0.92
 # scrolling_only = true
 # max_title_chars = 50
+
+# Per-monitor overrides (uncomment and adjust for your setup):
+# [monitors.DP-1]
+# position = "right"
+# layout = "horizontal"
+#
+# [monitors.HDMI-A-1]
+# position = "top"
+# layout = "vertical"
 TOML
     echo "Created default config at $CONFIG_DIR/config.toml"
 fi

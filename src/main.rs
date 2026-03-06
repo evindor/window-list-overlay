@@ -76,15 +76,17 @@ fn main() {
                 let overlay = Rc::clone(&overlay);
                 let provider = provider.clone();
                 let keyboards = Rc::clone(&keyboards);
-                let config = Rc::clone(&config);
                 glib::source::unix_signal_add_local(libc::SIGUSR1, move || {
                     // If Super already released by the time signal arrives, skip
                     if !keyboards.is_empty() && !keys::is_super_pressed(&keyboards) {
                         return glib::ControlFlow::Continue;
                     }
 
-                    load_css(&provider, &config);
-                    overlay.borrow().show();
+                    let o = overlay.borrow();
+                    if o.reload_config_if_changed() {
+                        load_css(&provider, &o.config.borrow());
+                    }
+                    o.show();
 
                     // Poll Super key state every 50ms — auto-hide on release
                     if !keyboards.is_empty() {
