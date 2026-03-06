@@ -1,3 +1,4 @@
+mod config;
 mod hyprland;
 mod icons;
 mod keys;
@@ -13,6 +14,8 @@ use gdk4::prelude::*;
 use gtk4::prelude::*;
 use gtk4::CssProvider;
 
+use crate::config::Config;
+
 const PID_FILE: &str = "/tmp/window-list-overlay.pid";
 const STATIC_CSS: &str = include_str!("style.css");
 
@@ -25,9 +28,9 @@ fn remove_pid_file() {
     let _ = fs::remove_file(PID_FILE);
 }
 
-fn load_css(provider: &CssProvider) {
+fn load_css(provider: &CssProvider, config: &Config) {
     let colors = theme::parse_theme();
-    let dynamic_css = theme::generate_css(&colors);
+    let dynamic_css = theme::generate_css(&colors, config);
     let combined = format!("{STATIC_CSS}\n{dynamic_css}");
     provider.load_from_data(&combined);
 }
@@ -35,85 +38,93 @@ fn load_css(provider: &CssProvider) {
 fn main() {
     write_pid_file();
 
+    let config = config::load();
+
     let app = gtk4::Application::builder()
         .application_id("com.github.window-list-overlay")
         .build();
 
-    app.connect_activate(move |app| {
-        // CSS provider
-        let provider = CssProvider::new();
-        load_css(&provider);
-        gtk4::style_context_add_provider_for_display(
-            &gdk4::Display::default().unwrap(),
-            &provider,
-            gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
-        );
+    let config = Rc::new(config);
 
-        // Find all keyboard devices for Super key polling
-        let keyboards = Rc::new(keys::find_keyboards());
+    app.connect_activate({
+        let config = Rc::clone(&config);
+        move |app| {
+            // CSS provider
+            let provider = CssProvider::new();
+            load_css(&provider, &config);
+            gtk4::style_context_add_provider_for_display(
+                &gdk4::Display::default().unwrap(),
+                &provider,
+                gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            );
 
-        // Create overlay
-        let overlay = Rc::new(RefCell::new(overlay::Overlay::new(app)));
+            // Find all keyboard devices for Super key polling
+            let keyboards = Rc::new(keys::find_keyboards());
 
-        // Present window once so it's realized (but stays hidden)
-        {
-            let o = overlay.borrow();
-            o.window.present();
-            o.window.set_visible(false);
-        }
+            // Create overlay
+            let overlay = Rc::new(RefCell::new(overlay::Overlay::new(app, &config)));
 
-        // SIGUSR1 → show overlay + start polling timers
-        {
-            let overlay = Rc::clone(&overlay);
-            let provider = provider.clone();
-            let keyboards = Rc::clone(&keyboards);
-            glib::source::unix_signal_add_local(libc::SIGUSR1, move || {
-                // If Super already released by the time signal arrives, skip
-                if !keyboards.is_empty() && !keys::is_super_pressed(&keyboards) {
-                    return glib::ControlFlow::Continue;
-                }
+            // Present window once so it's realized (but stays hidden)
+            {
+                let o = overlay.borrow();
+                o.window.present();
+                o.window.set_visible(false);
+            }
 
-                load_css(&provider);
-                overlay.borrow().show();
-
-                // Poll Super key state every 50ms — auto-hide on release
-                if !keyboards.is_empty() {
-                    let poll_overlay = Rc::clone(&overlay);
-                    let poll_kbds = Rc::clone(&keyboards);
-                    glib::timeout_add_local(Duration::from_millis(50), move || {
-                        if !poll_overlay.borrow().window.is_visible() {
-                            return glib::ControlFlow::Break;
-                        }
-                        if !keys::is_super_pressed(&poll_kbds) {
-                            poll_overlay.borrow().hide();
-                            return glib::ControlFlow::Break;
-                        }
-                        glib::ControlFlow::Continue
-                    });
-                }
-
-                // Refresh timer: re-populates every 200ms while visible
-                let timer_overlay = Rc::clone(&overlay);
-                glib::timeout_add_local(Duration::from_millis(200), move || {
-                    let o = timer_overlay.borrow();
-                    if o.window.is_visible() {
-                        o.populate();
-                        glib::ControlFlow::Continue
-                    } else {
-                        glib::ControlFlow::Break
+            // SIGUSR1 → show overlay + start polling timers
+            {
+                let overlay = Rc::clone(&overlay);
+                let provider = provider.clone();
+                let keyboards = Rc::clone(&keyboards);
+                let config = Rc::clone(&config);
+                glib::source::unix_signal_add_local(libc::SIGUSR1, move || {
+                    // If Super already released by the time signal arrives, skip
+                    if !keyboards.is_empty() && !keys::is_super_pressed(&keyboards) {
+                        return glib::ControlFlow::Continue;
                     }
-                });
-                glib::ControlFlow::Continue
-            });
-        }
 
-        // SIGUSR2 → manual hide (fallback)
-        {
-            let overlay = Rc::clone(&overlay);
-            glib::source::unix_signal_add_local(libc::SIGUSR2, move || {
-                overlay.borrow().hide();
-                glib::ControlFlow::Continue
-            });
+                    load_css(&provider, &config);
+                    overlay.borrow().show();
+
+                    // Poll Super key state every 50ms — auto-hide on release
+                    if !keyboards.is_empty() {
+                        let poll_overlay = Rc::clone(&overlay);
+                        let poll_kbds = Rc::clone(&keyboards);
+                        glib::timeout_add_local(Duration::from_millis(50), move || {
+                            if !poll_overlay.borrow().window.is_visible() {
+                                return glib::ControlFlow::Break;
+                            }
+                            if !keys::is_super_pressed(&poll_kbds) {
+                                poll_overlay.borrow().hide();
+                                return glib::ControlFlow::Break;
+                            }
+                            glib::ControlFlow::Continue
+                        });
+                    }
+
+                    // Refresh timer: re-populates every 200ms while visible
+                    let timer_overlay = Rc::clone(&overlay);
+                    glib::timeout_add_local(Duration::from_millis(200), move || {
+                        let o = timer_overlay.borrow();
+                        if o.window.is_visible() {
+                            o.populate();
+                            glib::ControlFlow::Continue
+                        } else {
+                            glib::ControlFlow::Break
+                        }
+                    });
+                    glib::ControlFlow::Continue
+                });
+            }
+
+            // SIGUSR2 → manual hide (fallback)
+            {
+                let overlay = Rc::clone(&overlay);
+                glib::source::unix_signal_add_local(libc::SIGUSR2, move || {
+                    overlay.borrow().hide();
+                    glib::ControlFlow::Continue
+                });
+            }
         }
     });
 

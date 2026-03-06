@@ -1,6 +1,8 @@
 use std::fs;
 use std::path::PathBuf;
 
+use crate::config::Config;
+
 const DEFAULT_FG: &str = "#d3c6aa";
 const DEFAULT_BG: &str = "#2d353b";
 
@@ -59,13 +61,16 @@ pub fn parse_theme() -> ThemeColors {
     colors
 }
 
-/// Generate dynamic CSS using theme colors
-pub fn generate_css(colors: &ThemeColors) -> String {
+/// Generate dynamic CSS using theme colors and config
+pub fn generate_css(colors: &ThemeColors, config: &Config) -> String {
     let fg = &colors.foreground;
     let bg = &colors.background;
+    let opacity = config.opacity;
+    let font_family = &config.font_family;
+    let font_size = config.font_size;
     format!(
         r#"window {{
-  background-color: alpha({bg}, 0.92);
+  background-color: alpha({bg}, {opacity});
   border: 1px solid alpha({fg}, 0.15);
 }}
 .window-row {{
@@ -76,6 +81,8 @@ pub fn generate_css(colors: &ThemeColors) -> String {
 }}
 .window-title {{
   color: {fg};
+  font-family: '{font_family}';
+  font-size: {font_size}px;
 }}
 "#
     )
