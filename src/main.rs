@@ -104,12 +104,13 @@ fn main() {
                         });
                     }
 
-                    // Refresh timer: re-populates every 200ms while visible
+                    // Refresh timer: re-populates every 200ms while visible,
+                    // and moves overlay if focused monitor changed
                     let timer_overlay = Rc::clone(&overlay);
                     glib::timeout_add_local(Duration::from_millis(200), move || {
                         let o = timer_overlay.borrow();
                         if o.window.is_visible() {
-                            o.populate();
+                            o.refresh();
                             glib::ControlFlow::Continue
                         } else {
                             glib::ControlFlow::Break

@@ -211,6 +211,24 @@ impl Overlay {
         }
     }
 
+    /// Refresh while visible: re-populate, and move to new monitor if focus changed
+    pub fn refresh(&self) {
+        let new_monitor = self.resolve_monitor();
+        let current = self.current_monitor.borrow().clone();
+
+        if new_monitor != current {
+            *self.current_monitor.borrow_mut() = new_monitor.clone();
+            self.apply_layout(&new_monitor);
+        }
+
+        self.populate();
+
+        // Hide if populate yielded nothing (e.g. non-scrolling workspace on new monitor)
+        if self.container.first_child().is_none() {
+            self.window.set_visible(false);
+        }
+    }
+
     pub fn hide(&self) {
         self.window.set_visible(false);
         // Clear children when hidden to free resources
