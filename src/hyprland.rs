@@ -1,3 +1,4 @@
+use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use std::process::Command;
 
@@ -42,10 +43,13 @@ pub struct HyprWorkspace {
 }
 
 fn hyprctl(args: &[&str]) -> Option<String> {
-    let output = Command::new("hyprctl")
-        .args(args)
-        .output()
-        .ok()?;
+    let output = match Command::new("hyprctl").args(args).output() {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("window-list-overlay: hyprctl {}: {e}", args.join(" "));
+            return None;
+        }
+    };
     if output.status.success() {
         Some(String::from_utf8_lossy(&output.stdout).to_string())
     } else {
@@ -53,9 +57,19 @@ fn hyprctl(args: &[&str]) -> Option<String> {
     }
 }
 
+fn hyprctl_json<T: DeserializeOwned>(args: &[&str]) -> Option<T> {
+    let json = hyprctl(args)?;
+    match serde_json::from_str(&json) {
+        Ok(v) => Some(v),
+        Err(e) => {
+            eprintln!("window-list-overlay: failed to parse hyprctl {} output: {e}", args.join(" "));
+            None
+        }
+    }
+}
+
 fn get_monitors() -> Option<Vec<HyprMonitor>> {
-    let json = hyprctl(&["monitors", "-j"])?;
-    serde_json::from_str(&json).ok()
+    hyprctl_json(&["monitors", "-j"])
 }
 
 /// Get the active workspace ID for a monitor.
@@ -78,8 +92,7 @@ pub fn get_focused_monitor_name() -> Option<String> {
 
 /// Get the tiled layout of a workspace (e.g. "scrolling", "dwindle", "master")
 pub fn get_workspace_layout(id: i64) -> Option<String> {
-    let json = hyprctl(&["workspaces", "-j"])?;
-    let workspaces: Vec<HyprWorkspace> = serde_json::from_str(&json).ok()?;
+    let workspaces: Vec<HyprWorkspace> = hyprctl_json(&["workspaces", "-j"])?;
     workspaces
         .into_iter()
         .find(|w| w.id == id)
@@ -88,13 +101,9 @@ pub fn get_workspace_layout(id: i64) -> Option<String> {
 
 /// Get all visible clients on a given workspace
 pub fn get_workspace_clients(workspace_id: i64) -> Vec<HyprClient> {
-    let json = match hyprctl(&["clients", "-j"]) {
-        Some(j) => j,
+    let clients: Vec<HyprClient> = match hyprctl_json(&["clients", "-j"]) {
+        Some(c) => c,
         None => return Vec::new(),
-    };
-    let clients: Vec<HyprClient> = match serde_json::from_str(&json) {
-        Ok(c) => c,
-        Err(_) => return Vec::new(),
     };
     let mut filtered: Vec<HyprClient> = clients
         .into_iter()
@@ -106,7 +115,6 @@ pub fn get_workspace_clients(workspace_id: i64) -> Vec<HyprClient> {
 
 /// Get the address of the currently active window
 pub fn get_active_window_address() -> Option<String> {
-    let json = hyprctl(&["activewindow", "-j"])?;
-    let active: ActiveWindow = serde_json::from_str(&json).ok()?;
+    let active: ActiveWindow = hyprctl_json(&["activewindow", "-j"])?;
     Some(active.address)
 }

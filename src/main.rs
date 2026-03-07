@@ -3,6 +3,7 @@ mod hyprland;
 mod icons;
 mod keys;
 mod overlay;
+mod scroller;
 mod theme;
 
 use std::cell::RefCell;
@@ -51,7 +52,7 @@ fn main() {
             let provider = CssProvider::new();
             load_css(&provider, &config);
             gtk4::style_context_add_provider_for_display(
-                &gdk4::Display::default().unwrap(),
+                &gdk4::Display::default().expect("GTK display not available"),
                 &provider,
                 gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
             );
@@ -83,6 +84,12 @@ fn main() {
                     }
 
                     let o = overlay.borrow();
+
+                    // Skip if already visible — timers are already running
+                    if o.window.is_visible() {
+                        return glib::ControlFlow::Continue;
+                    }
+
                     if o.reload_config_if_changed() {
                         load_css(&provider, &o.config.borrow());
                     }

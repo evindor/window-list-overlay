@@ -1,20 +1,18 @@
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
-use std::time::{Duration, SystemTime};
+use std::cell::RefCell;
+use std::time::SystemTime;
 
 use gdk4::prelude::*;
 use gtk4::prelude::*;
-use gtk4::{
-    Align, Box as GtkBox, DrawingArea, Image, Label, Orientation, Overlay as GtkOverlay, Window,
-};
+use gtk4::{Align, Box as GtkBox, Image, Label, Orientation, Window};
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 
 use crate::config::{self, Config, Layout, OverflowStyle, Position};
 use crate::hyprland;
 use crate::icons;
+use crate::scroller;
 
-/// Snapshot of window list state for change detection
-type WindowState = Vec<(String, String, bool)>; // (address, title, is_active)
+/// Snapshot of window list state for change detection (address, title)
+type WindowState = Vec<(String, String)>;
 
 const ROW_HORIZONTAL_PADDING: i32 = 32;
 const ROW_CHILD_SPACING: i32 = 8;
@@ -27,7 +25,7 @@ pub struct Overlay {
     config_mtime: RefCell<Option<SystemTime>>,
     current_monitor: RefCell<String>,
     last_window_state: RefCell<WindowState>,
-    scroll_cancel: RefCell<Rc<Cell<bool>>>,
+    last_active_addr: RefCell<String>,
 }
 
 impl Overlay {
@@ -58,7 +56,7 @@ impl Overlay {
             config_mtime: RefCell::new(config::config_mtime()),
             current_monitor: RefCell::new(String::new()),
             last_window_state: RefCell::new(Vec::new()),
-            scroll_cancel: RefCell::new(Rc::new(Cell::new(false))),
+            last_active_addr: RefCell::new(String::new()),
         }
     }
 
@@ -135,23 +133,42 @@ impl Overlay {
         }
     }
 
-    /// Signal all running scroll animations to stop
-    fn cancel_scroll_animations(&self) {
-        self.scroll_cancel.borrow().set(true);
-        *self.scroll_cancel.borrow_mut() = Rc::new(Cell::new(false));
+    /// Remove all children and reset window state.
+    /// Tick-callback animations stop automatically when widgets are dropped.
+    fn clear_content(&self) {
+        while let Some(child) = self.container.first_child() {
+            self.container.remove(&child);
+        }
+        *self.last_window_state.borrow_mut() = Vec::new();
+        *self.last_active_addr.borrow_mut() = String::new();
     }
 
-    /// Check if window list has changed since last populate
-    fn window_list_changed(&self, clients: &[hyprland::HyprClient], active_addr: &str) -> bool {
+    /// Check if the window list (addresses + titles) has changed since last populate
+    fn window_list_changed(&self, clients: &[hyprland::HyprClient]) -> bool {
         let new_state: WindowState = clients
             .iter()
-            .map(|c| (c.address.clone(), c.title.clone(), c.address == active_addr))
+            .map(|c| (c.address.clone(), c.title.clone()))
             .collect();
         let changed = *self.last_window_state.borrow() != new_state;
         if changed {
             *self.last_window_state.borrow_mut() = new_state;
         }
         changed
+    }
+
+    /// Update active highlight CSS classes on existing rows without rebuilding
+    fn update_active_highlight(&self, active_addr: &str, clients: &[hyprland::HyprClient]) {
+        let mut child = self.container.first_child();
+        for client in clients {
+            let Some(row) = child else { break };
+            if client.address == active_addr {
+                row.add_css_class("active");
+            } else {
+                row.remove_css_class("active");
+            }
+            child = row.next_sibling();
+        }
+        *self.last_active_addr.borrow_mut() = active_addr.to_string();
     }
 
     /// Clear and rebuild the window list from hyprland state
@@ -161,11 +178,7 @@ impl Overlay {
         let workspace_id = match hyprland::get_active_workspace(&config.monitor) {
             Some(id) => id,
             None => {
-                self.cancel_scroll_animations();
-                while let Some(child) = self.container.first_child() {
-                    self.container.remove(&child);
-                }
-                *self.last_window_state.borrow_mut() = Vec::new();
+                self.clear_content();
                 return;
             }
         };
@@ -174,11 +187,7 @@ impl Overlay {
         if config.scrolling_only {
             let layout = hyprland::get_workspace_layout(workspace_id).unwrap_or_default();
             if layout != "scrolling" {
-                self.cancel_scroll_animations();
-                while let Some(child) = self.container.first_child() {
-                    self.container.remove(&child);
-                }
-                *self.last_window_state.borrow_mut() = Vec::new();
+                self.clear_content();
                 return;
             }
         }
@@ -186,20 +195,25 @@ impl Overlay {
         let clients = hyprland::get_workspace_clients(workspace_id);
         let active_addr = hyprland::get_active_window_address().unwrap_or_default();
 
-        // Skip rebuild if nothing changed (preserves scroll animation state)
-        if !self.window_list_changed(&clients, &active_addr) {
+        let list_changed = self.window_list_changed(&clients);
+        let active_changed = active_addr != *self.last_active_addr.borrow();
+
+        if !list_changed && !active_changed {
             return;
         }
 
-        // Cancel existing scroll animations before rebuilding
-        self.cancel_scroll_animations();
+        // If only the active window changed, update CSS classes without rebuilding
+        if !list_changed {
+            self.update_active_highlight(&active_addr, &clients);
+            return;
+        }
 
-        // Clear existing children
+        // Full rebuild: remove children (tick callbacks stop when widgets are dropped)
         while let Some(child) = self.container.first_child() {
             self.container.remove(&child);
         }
 
-        let display = gdk4::Display::default().unwrap();
+        let display = gdk4::Display::default().expect("GTK display not available");
         let icon_theme = gtk4::IconTheme::for_display(&display);
 
         let effective = config.effective_for(&monitor_name);
@@ -230,12 +244,11 @@ impl Overlay {
                         row.append(&build_truncated_title(&client.title, title_width));
                     }
                     OverflowStyle::Scroll => {
-                        build_scroll_title(
+                        scroller::build_scroll_title(
                             &row,
                             &client.title,
                             title_width,
                             config.scroll_speed,
-                            &self.scroll_cancel.borrow(),
                         );
                     }
                 }
@@ -265,6 +278,8 @@ impl Overlay {
 
             self.container.append(&row);
         }
+
+        *self.last_active_addr.borrow_mut() = active_addr;
     }
 
     /// Reload config from disk only if the file has been modified
@@ -309,203 +324,17 @@ impl Overlay {
 
     pub fn hide(&self) {
         self.window.set_visible(false);
-        self.cancel_scroll_animations();
-        // Clear children when hidden to free resources
-        while let Some(child) = self.container.first_child() {
-            self.container.remove(&child);
-        }
-        *self.last_window_state.borrow_mut() = Vec::new();
+        self.clear_content();
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum ScrollPhase {
-    PauseStart,
-    Scrolling,
-    PauseEnd,
-    Resetting,
-}
-
-/// Build a scroll-capable title widget with a cancellation token.
-/// Uses a single timer that waits for layout, measures overflow, then animates.
-fn build_scroll_title(
-    row: &GtkBox,
-    title: &str,
-    title_width: i32,
-    scroll_speed: i32,
-    cancel: &Rc<Cell<bool>>,
-) {
-    let overlay = GtkOverlay::new();
-    overlay.add_css_class("title-container");
-    overlay.set_overflow(gtk4::Overflow::Hidden);
-
-    let area = DrawingArea::new();
-    area.set_content_width(title_width);
-    area.set_content_height(1);
-    area.set_halign(Align::Start);
-    area.add_css_class("window-title");
-    let title = Rc::new(title.to_string());
-    let offset_px = Rc::new(RefCell::new(0f64));
-    let (natural_width, text_height) = measure_title(&area, title.as_str());
-    let initial_overflow = (natural_width - title_width).max(0);
-    area.set_content_height(text_height.max(1));
-
-    {
-        let title = Rc::clone(&title);
-        let offset_px = Rc::clone(&offset_px);
-        area.set_draw_func(move |area, cr, width, height| {
-            let layout = area.create_pango_layout(Some(title.as_str()));
-            layout.set_single_paragraph_mode(true);
-
-            let (_, text_height) = layout.pixel_size();
-            let y = ((height - text_height).max(0) / 2) as f64;
-
-            let _ = cr.save();
-            cr.rectangle(0.0, 0.0, width as f64, height as f64);
-            cr.clip();
-            gtk4::render_layout(&area.style_context(), cr, -*offset_px.borrow(), y, &layout);
-            let _ = cr.restore();
-        });
-    }
-
-    overlay.set_child(Some(&area));
-
-    // Fade overlays
-    let fade_left = GtkBox::new(Orientation::Horizontal, 0);
-    fade_left.add_css_class("fade-left");
-    fade_left.set_halign(Align::Start);
-    fade_left.set_visible(false);
-
-    let fade_right = GtkBox::new(Orientation::Horizontal, 0);
-    fade_right.add_css_class("fade-right");
-    fade_right.set_halign(Align::End);
-    fade_right.set_visible(initial_overflow > 0);
-
-    overlay.add_overlay(&fade_left);
-    overlay.add_overlay(&fade_right);
-
-    row.append(&overlay);
-
-    if initial_overflow <= 0 {
-        return;
-    }
-
-    // Single timer: waits for layout → measures overflow → animates
-    let phase = Rc::new(RefCell::new(ScrollPhase::PauseStart));
-    let overflow = Rc::new(RefCell::new(initial_overflow));
-    let offset = Rc::new(RefCell::new(0i32));
-    let pause_ticks = Rc::new(RefCell::new(0u32));
-
-    let fps = 30u32;
-    let interval = Duration::from_millis(1000 / fps as u64);
-    let px_per_tick = (scroll_speed as f64 / fps as f64).max(1.0);
-    let pause_duration_ticks = (1.5 * fps as f64) as u32;
-
-    let cancel = Rc::clone(cancel);
-    let overlay_weak = overlay.downgrade();
-    let area_weak = area.downgrade();
-    let fade_left_weak = fade_left.downgrade();
-    let fade_right_weak = fade_right.downgrade();
-    glib::timeout_add_local(interval, move || {
-        if cancel.get() {
-            return glib::ControlFlow::Break;
-        }
-
-        let Some(overlay) = overlay_weak.upgrade() else {
-            return glib::ControlFlow::Break;
-        };
-        let Some(area) = area_weak.upgrade() else {
-            return glib::ControlFlow::Break;
-        };
-        let Some(fade_left) = fade_left_weak.upgrade() else {
-            return glib::ControlFlow::Break;
-        };
-        let Some(fade_right) = fade_right_weak.upgrade() else {
-            return glib::ControlFlow::Break;
-        };
-
-        if area.parent().is_none() || overlay.root().is_none() {
-            return glib::ControlFlow::Break;
-        }
-
-        let mut current_phase = phase.borrow_mut();
-        let mut current_offset = offset.borrow_mut();
-        let mut ticks = pause_ticks.borrow_mut();
-
-        match *current_phase {
-            ScrollPhase::PauseStart => {
-                *ticks += 1;
-                if *ticks >= pause_duration_ticks {
-                    *ticks = 0;
-                    *current_phase = ScrollPhase::Scrolling;
-                }
-            }
-            ScrollPhase::Scrolling => {
-                let max_scroll = *overflow.borrow();
-                *current_offset = (*current_offset + px_per_tick as i32).min(max_scroll);
-                *offset_px.borrow_mut() = *current_offset as f64;
-                area.queue_draw();
-
-                fade_left.set_visible(*current_offset > 0);
-                fade_right.set_visible(*current_offset < max_scroll);
-
-                if *current_offset >= max_scroll {
-                    *current_phase = ScrollPhase::PauseEnd;
-                    *ticks = 0;
-                }
-            }
-            ScrollPhase::PauseEnd => {
-                *ticks += 1;
-                if *ticks >= pause_duration_ticks {
-                    *ticks = 0;
-                    *current_phase = ScrollPhase::Resetting;
-                }
-            }
-            ScrollPhase::Resetting => {
-                *current_offset = 0;
-                *offset_px.borrow_mut() = 0.0;
-                area.queue_draw();
-                fade_left.set_visible(false);
-                fade_right.set_visible(true);
-                *current_phase = ScrollPhase::PauseStart;
-            }
-        }
-
-        glib::ControlFlow::Continue
-    });
-}
-
-fn build_truncated_title(title: &str, title_width: i32) -> DrawingArea {
-    let area = DrawingArea::new();
-    area.set_content_width(title_width);
-    let (_, text_height) = measure_title(&area, title);
-    area.set_content_height(text_height.max(1));
-    area.set_halign(Align::Start);
-    area.add_css_class("window-title");
-
-    let title = Rc::new(title.to_string());
-    {
-        let title = Rc::clone(&title);
-        area.set_draw_func(move |area, cr, width, height| {
-            let layout = area.create_pango_layout(Some(title.as_str()));
-            layout.set_single_paragraph_mode(true);
-            layout.set_ellipsize(gtk4::pango::EllipsizeMode::End);
-            layout.set_width(width.max(1) * gtk4::pango::SCALE);
-
-            let (_, text_height) = layout.pixel_size();
-            area.set_content_height(text_height.max(1));
-            let y = ((height - text_height).max(0) / 2) as f64;
-            gtk4::render_layout(&area.style_context(), cr, 0.0, y, &layout);
-        });
-    }
-
-    area
-}
-
-fn measure_title(widget: &impl IsA<gtk4::Widget>, title: &str) -> (i32, i32) {
-    let layout = widget.create_pango_layout(Some(title));
-    layout.set_single_paragraph_mode(true);
-    layout.pixel_size()
+fn build_truncated_title(title: &str, title_width: i32) -> Label {
+    let label = Label::new(Some(title));
+    label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+    label.set_xalign(0.0);
+    label.set_size_request(title_width, -1);
+    label.add_css_class("window-title");
+    label
 }
 
 fn title_width_budget(max_element_width: i32, icon_size: i32) -> Option<i32> {

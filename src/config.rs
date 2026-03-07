@@ -3,45 +3,30 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Position {
+    #[default]
     Right,
     Left,
     Top,
     Bottom,
 }
 
-impl Default for Position {
-    fn default() -> Self {
-        Self::Right
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Layout {
+    #[default]
     Vertical,
     Horizontal,
 }
 
-impl Default for Layout {
-    fn default() -> Self {
-        Self::Vertical
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum OverflowStyle {
+    #[default]
     Truncate,
     Scroll,
-}
-
-impl Default for OverflowStyle {
-    fn default() -> Self {
-        Self::Truncate
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -110,12 +95,8 @@ impl Config {
     pub fn effective_for(&self, monitor: &str) -> EffectiveConfig {
         let overrides = self.monitors.get(monitor);
         EffectiveConfig {
-            position: overrides
-                .and_then(|o| o.position.clone())
-                .unwrap_or_else(|| self.position.clone()),
-            layout: overrides
-                .and_then(|o| o.layout.clone())
-                .unwrap_or_else(|| self.layout.clone()),
+            position: overrides.and_then(|o| o.position).unwrap_or(self.position),
+            layout: overrides.and_then(|o| o.layout).unwrap_or(self.layout),
             margin: overrides
                 .and_then(|o| o.margin)
                 .unwrap_or(self.margin),
@@ -137,8 +118,19 @@ fn config_path() -> PathBuf {
 pub fn load() -> Config {
     let path = config_path();
     match fs::read_to_string(&path) {
-        Ok(content) => toml::from_str(&content).unwrap_or_default(),
-        Err(_) => Config::default(),
+        Ok(content) => match toml::from_str(&content) {
+            Ok(config) => config,
+            Err(e) => {
+                eprintln!("window-list-overlay: failed to parse {}: {e}", path.display());
+                Config::default()
+            }
+        },
+        Err(e) => {
+            if path.exists() {
+                eprintln!("window-list-overlay: failed to read {}: {e}", path.display());
+            }
+            Config::default()
+        }
     }
 }
 

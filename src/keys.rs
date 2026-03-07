@@ -3,7 +3,7 @@ use std::os::unix::io::AsRawFd;
 
 const KEY_LEFTMETA: usize = 125;
 const KEY_CNT: usize = 0x300;
-const KEY_BYTES: usize = (KEY_CNT + 7) / 8;
+const KEY_BYTES: usize = KEY_CNT.div_ceil(8);
 
 fn ior(nr: libc::c_ulong, size: libc::c_ulong) -> libc::c_ulong {
     (2 << 30) | (size << 16) | ((b'E' as libc::c_ulong) << 8) | nr
@@ -36,6 +36,8 @@ pub fn find_keyboards() -> Vec<File> {
         }
         if let Ok(file) = File::open(entry.path()) {
             let mut caps = [0u8; KEY_BYTES];
+            // SAFETY: caps is a stack-allocated buffer of KEY_BYTES; the ioctl writes
+            // at most KEY_BYTES bytes into it, matching the size encoded in eviocgbit_key().
             let ret = unsafe { libc::ioctl(file.as_raw_fd(), eviocgbit_key(), caps.as_mut_ptr()) };
             if ret >= 0 && caps[KEY_LEFTMETA / 8] & (1 << (KEY_LEFTMETA % 8)) != 0 {
                 keyboards.push(file);
@@ -49,10 +51,11 @@ pub fn find_keyboards() -> Vec<File> {
 pub fn is_super_pressed(keyboards: &[File]) -> bool {
     for kbd in keyboards {
         let mut keys = [0u8; KEY_BYTES];
-        if unsafe { libc::ioctl(kbd.as_raw_fd(), eviocgkey(), keys.as_mut_ptr()) } >= 0 {
-            if keys[KEY_LEFTMETA / 8] & (1 << (KEY_LEFTMETA % 8)) != 0 {
-                return true;
-            }
+        // SAFETY: keys is a stack-allocated buffer of KEY_BYTES; the ioctl writes
+        // at most KEY_BYTES bytes into it, matching the size encoded in eviocgkey().
+        let ret = unsafe { libc::ioctl(kbd.as_raw_fd(), eviocgkey(), keys.as_mut_ptr()) };
+        if ret >= 0 && keys[KEY_LEFTMETA / 8] & (1 << (KEY_LEFTMETA % 8)) != 0 {
+            return true;
         }
     }
     false

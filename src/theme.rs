@@ -30,7 +30,12 @@ pub fn parse_theme() -> ThemeColors {
     let path = waybar_css_path();
     let content = match fs::read_to_string(&path) {
         Ok(c) => c,
-        Err(_) => return ThemeColors::default(),
+        Err(e) => {
+            if path.exists() {
+                eprintln!("window-list-overlay: failed to read theme {}: {e}", path.display());
+            }
+            return ThemeColors::default();
+        }
     };
 
     let mut colors = ThemeColors::default();
