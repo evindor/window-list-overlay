@@ -4,7 +4,9 @@ use std::time::{Duration, SystemTime};
 
 use gdk4::prelude::*;
 use gtk4::prelude::*;
-use gtk4::{Align, Box as GtkBox, Image, Label, Orientation, Overlay as GtkOverlay, Window};
+use gtk4::{
+    Align, Box as GtkBox, DrawingArea, Image, Label, Orientation, Overlay as GtkOverlay, Window,
+};
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 
 use crate::config::{self, Config, Layout, OverflowStyle, Position};
@@ -13,6 +15,10 @@ use crate::icons;
 
 /// Snapshot of window list state for change detection
 type WindowState = Vec<(String, String, bool)>; // (address, title, is_active)
+
+const ROW_HORIZONTAL_PADDING: i32 = 32;
+const ROW_CHILD_SPACING: i32 = 8;
+const ICON_TRAILING_MARGIN: i32 = 12;
 
 pub struct Overlay {
     pub window: Window,
@@ -199,10 +205,12 @@ impl Overlay {
         let effective = config.effective_for(&monitor_name);
         let max_chars = config.max_title_chars as usize;
         let max_width = effective.max_element_width;
+        let title_width = title_width_budget(max_width, config.icon_size);
 
         for client in &clients {
             let row = GtkBox::new(Orientation::Horizontal, 8);
             row.add_css_class("window-row");
+            row.set_tooltip_text(Some(&client.title));
 
             let is_active = client.address == active_addr;
             if is_active {
@@ -216,20 +224,16 @@ impl Overlay {
             image.add_css_class("window-icon");
             row.append(&image);
 
-            if max_width > 0 {
+            if let Some(title_width) = title_width {
                 match config.overflow_style {
                     OverflowStyle::Truncate => {
-                        let label = Label::new(Some(&client.title));
-                        label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
-                        label.set_xalign(0.0);
-                        label.set_hexpand(true);
-                        label.add_css_class("window-title");
-                        row.append(&label);
+                        row.append(&build_truncated_title(&client.title, title_width));
                     }
                     OverflowStyle::Scroll => {
                         build_scroll_title(
                             &row,
                             &client.title,
+                            title_width,
                             config.scroll_speed,
                             &self.scroll_cancel.borrow(),
                         );
@@ -328,28 +332,41 @@ enum ScrollPhase {
 fn build_scroll_title(
     row: &GtkBox,
     title: &str,
+    title_width: i32,
     scroll_speed: i32,
     cancel: &Rc<Cell<bool>>,
 ) {
     let overlay = GtkOverlay::new();
-    overlay.set_hexpand(true);
     overlay.add_css_class("title-container");
     overlay.set_overflow(gtk4::Overflow::Hidden);
 
-    // Viewport box that will be shifted via margin_start
-    let viewport = GtkBox::new(Orientation::Horizontal, 0);
-    viewport.add_css_class("scroll-viewport");
+    let area = DrawingArea::new();
+    area.set_content_width(title_width);
+    area.set_content_height(1);
+    area.set_halign(Align::Start);
+    area.add_css_class("window-title");
+    let title = Rc::new(title.to_string());
+    let offset_px = Rc::new(RefCell::new(0f64));
 
-    let label = Label::new(Some(title));
-    label.set_xalign(0.0);
-    label.add_css_class("window-title");
-    label.set_ellipsize(gtk4::pango::EllipsizeMode::None);
-    // Request minimal width so the label doesn't inflate the window,
-    // while keeping the label's natural width available for measurement.
-    label.set_max_width_chars(1);
-    viewport.append(&label);
+    {
+        let title = Rc::clone(&title);
+        let offset_px = Rc::clone(&offset_px);
+        area.set_draw_func(move |area, cr, width, height| {
+            let layout = area.create_pango_layout(Some(title.as_str()));
+            layout.set_single_paragraph_mode(true);
 
-    overlay.set_child(Some(&viewport));
+            let (_, text_height) = layout.pixel_size();
+            let y = ((height - text_height).max(0) / 2) as f64;
+
+            let _ = cr.save();
+            cr.rectangle(0.0, 0.0, width as f64, height as f64);
+            cr.clip();
+            gtk4::render_layout(&area.style_context(), cr, -*offset_px.borrow(), y, &layout);
+            let _ = cr.restore();
+        });
+    }
+
+    overlay.set_child(Some(&area));
 
     // Fade overlays
     let fade_left = GtkBox::new(Orientation::Horizontal, 0);
@@ -380,8 +397,7 @@ fn build_scroll_title(
 
     let cancel = Rc::clone(cancel);
     let overlay_weak = overlay.downgrade();
-    let viewport_weak = viewport.downgrade();
-    let label_weak = label.downgrade();
+    let area_weak = area.downgrade();
     let fade_left_weak = fade_left.downgrade();
     let fade_right_weak = fade_right.downgrade();
     glib::timeout_add_local(interval, move || {
@@ -392,10 +408,7 @@ fn build_scroll_title(
         let Some(overlay) = overlay_weak.upgrade() else {
             return glib::ControlFlow::Break;
         };
-        let Some(viewport) = viewport_weak.upgrade() else {
-            return glib::ControlFlow::Break;
-        };
-        let Some(label) = label_weak.upgrade() else {
+        let Some(area) = area_weak.upgrade() else {
             return glib::ControlFlow::Break;
         };
         let Some(fade_left) = fade_left_weak.upgrade() else {
@@ -405,7 +418,7 @@ fn build_scroll_title(
             return glib::ControlFlow::Break;
         };
 
-        if viewport.parent().is_none() || overlay.root().is_none() {
+        if area.parent().is_none() || overlay.root().is_none() {
             return glib::ControlFlow::Break;
         }
 
@@ -419,7 +432,10 @@ fn build_scroll_title(
                 if available <= 0 {
                     return glib::ControlFlow::Continue;
                 }
-                let (_, natural, _, _) = label.measure(Orientation::Horizontal, -1);
+                let layout = area.create_pango_layout(Some(title.as_str()));
+                layout.set_single_paragraph_mode(true);
+                let (natural, text_height) = layout.pixel_size();
+                area.set_content_height(text_height.max(1));
                 let ov = natural - available;
                 if ov <= 0 {
                     return glib::ControlFlow::Break;
@@ -438,7 +454,8 @@ fn build_scroll_title(
             ScrollPhase::Scrolling => {
                 let max_scroll = *overflow.borrow();
                 *current_offset = (*current_offset + px_per_tick as i32).min(max_scroll);
-                viewport.set_margin_start(-*current_offset);
+                *offset_px.borrow_mut() = *current_offset as f64;
+                area.queue_draw();
 
                 fade_left.set_visible(*current_offset > 0);
                 fade_right.set_visible(*current_offset < max_scroll);
@@ -457,7 +474,8 @@ fn build_scroll_title(
             }
             ScrollPhase::Resetting => {
                 *current_offset = 0;
-                viewport.set_margin_start(0);
+                *offset_px.borrow_mut() = 0.0;
+                area.queue_draw();
                 fade_left.set_visible(false);
                 fade_right.set_visible(true);
                 *current_phase = ScrollPhase::PauseStart;
@@ -466,6 +484,41 @@ fn build_scroll_title(
 
         glib::ControlFlow::Continue
     });
+}
+
+fn build_truncated_title(title: &str, title_width: i32) -> DrawingArea {
+    let area = DrawingArea::new();
+    area.set_content_width(title_width);
+    area.set_content_height(1);
+    area.set_halign(Align::Start);
+    area.add_css_class("window-title");
+
+    let title = Rc::new(title.to_string());
+    {
+        let title = Rc::clone(&title);
+        area.set_draw_func(move |area, cr, width, height| {
+            let layout = area.create_pango_layout(Some(title.as_str()));
+            layout.set_single_paragraph_mode(true);
+            layout.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+            layout.set_width(width.max(1) * gtk4::pango::SCALE);
+
+            let (_, text_height) = layout.pixel_size();
+            area.set_content_height(text_height.max(1));
+            let y = ((height - text_height).max(0) / 2) as f64;
+            gtk4::render_layout(&area.style_context(), cr, 0.0, y, &layout);
+        });
+    }
+
+    area
+}
+
+fn title_width_budget(max_element_width: i32, icon_size: i32) -> Option<i32> {
+    if max_element_width <= 0 {
+        return None;
+    }
+
+    let reserved = ROW_HORIZONTAL_PADDING + ROW_CHILD_SPACING + ICON_TRAILING_MARGIN + icon_size;
+    Some((max_element_width - reserved).max(1))
 }
 
 fn find_monitor_by_name(window: &Window, name: &str) -> Option<gdk4::Monitor> {
