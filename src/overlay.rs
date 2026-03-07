@@ -320,7 +320,6 @@ impl Overlay {
 
 #[derive(Clone, Copy, PartialEq)]
 enum ScrollPhase {
-    WaitingForLayout,
     PauseStart,
     Scrolling,
     PauseEnd,
@@ -347,6 +346,9 @@ fn build_scroll_title(
     area.add_css_class("window-title");
     let title = Rc::new(title.to_string());
     let offset_px = Rc::new(RefCell::new(0f64));
+    let (natural_width, text_height) = measure_title(&area, title.as_str());
+    let initial_overflow = (natural_width - title_width).max(0);
+    area.set_content_height(text_height.max(1));
 
     {
         let title = Rc::clone(&title);
@@ -377,16 +379,20 @@ fn build_scroll_title(
     let fade_right = GtkBox::new(Orientation::Horizontal, 0);
     fade_right.add_css_class("fade-right");
     fade_right.set_halign(Align::End);
-    fade_right.set_visible(false);
+    fade_right.set_visible(initial_overflow > 0);
 
     overlay.add_overlay(&fade_left);
     overlay.add_overlay(&fade_right);
 
     row.append(&overlay);
 
+    if initial_overflow <= 0 {
+        return;
+    }
+
     // Single timer: waits for layout → measures overflow → animates
-    let phase = Rc::new(RefCell::new(ScrollPhase::WaitingForLayout));
-    let overflow = Rc::new(RefCell::new(0i32));
+    let phase = Rc::new(RefCell::new(ScrollPhase::PauseStart));
+    let overflow = Rc::new(RefCell::new(initial_overflow));
     let offset = Rc::new(RefCell::new(0i32));
     let pause_ticks = Rc::new(RefCell::new(0u32));
 
@@ -427,23 +433,6 @@ fn build_scroll_title(
         let mut ticks = pause_ticks.borrow_mut();
 
         match *current_phase {
-            ScrollPhase::WaitingForLayout => {
-                let available = overlay.allocated_width();
-                if available <= 0 {
-                    return glib::ControlFlow::Continue;
-                }
-                let layout = area.create_pango_layout(Some(title.as_str()));
-                layout.set_single_paragraph_mode(true);
-                let (natural, text_height) = layout.pixel_size();
-                area.set_content_height(text_height.max(1));
-                let ov = natural - available;
-                if ov <= 0 {
-                    return glib::ControlFlow::Break;
-                }
-                *overflow.borrow_mut() = ov;
-                fade_right.set_visible(true);
-                *current_phase = ScrollPhase::PauseStart;
-            }
             ScrollPhase::PauseStart => {
                 *ticks += 1;
                 if *ticks >= pause_duration_ticks {
@@ -489,7 +478,8 @@ fn build_scroll_title(
 fn build_truncated_title(title: &str, title_width: i32) -> DrawingArea {
     let area = DrawingArea::new();
     area.set_content_width(title_width);
-    area.set_content_height(1);
+    let (_, text_height) = measure_title(&area, title);
+    area.set_content_height(text_height.max(1));
     area.set_halign(Align::Start);
     area.add_css_class("window-title");
 
@@ -510,6 +500,12 @@ fn build_truncated_title(title: &str, title_width: i32) -> DrawingArea {
     }
 
     area
+}
+
+fn measure_title(widget: &impl IsA<gtk4::Widget>, title: &str) -> (i32, i32) {
+    let layout = widget.create_pango_layout(Some(title));
+    layout.set_single_paragraph_mode(true);
+    layout.pixel_size()
 }
 
 fn title_width_budget(max_element_width: i32, icon_size: i32) -> Option<i32> {
