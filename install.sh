@@ -33,6 +33,9 @@ if [ ! -f "$CONFIG_DIR/config.toml" ]; then
 # opacity = 0.92
 # scrolling_only = true
 # max_title_chars = 50
+# max_element_width = 0
+# overflow_style = "truncate"
+# scroll_speed = 40
 
 # Per-monitor overrides (uncomment and adjust for your setup):
 # [monitors.DP-1]
@@ -42,6 +45,7 @@ if [ ! -f "$CONFIG_DIR/config.toml" ]; then
 # [monitors.HDMI-A-1]
 # position = "top"
 # layout = "vertical"
+# max_element_width = 280
 TOML
     echo "Created default config at $CONFIG_DIR/config.toml"
 fi

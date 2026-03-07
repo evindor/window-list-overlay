@@ -67,13 +67,22 @@ opacity = 0.92
 # Only show on scrolling workspaces (hides on dwindle/master)
 scrolling_only = true
 
-# Truncate window titles after this many characters
+# Truncate window titles after this many characters (used when max_element_width is 0)
 max_title_chars = 50
+
+# Max width per row in pixels (0 = use full overlay width, no pixel-based truncation)
+max_element_width = 0
+
+# How to handle titles that exceed the row width: "truncate" or "scroll"
+overflow_style = "truncate"
+
+# Scroll speed in pixels per second (when overflow_style = "scroll")
+scroll_speed = 40
 ```
 
 ### Per-monitor overrides
 
-Override `position`, `layout`, `margin`, or `width` for specific monitors:
+Override `position`, `layout`, `margin`, `width`, or `max_element_width` for specific monitors:
 
 ```toml
 [monitors.DP-1]
@@ -83,6 +92,7 @@ layout = "horizontal"
 [monitors.HDMI-A-1]
 position = "top"
 layout = "vertical"
+max_element_width = 280
 ```
 
 ### Theme
