@@ -1,22 +1,65 @@
 #!/bin/bash
+
+PID_FILE=/tmp/window-list-overlay.pid
+SHOW_PID_FILE=/tmp/window-list-show.pid
+HIDE_PID_FILE=/tmp/window-list-hide.pid
+DAEMON="$HOME/.local/share/window-list-overlay/window-list-overlay"
+
+is_pid_running() {
+    local pid="$1"
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
+read_pid() {
+    local file="$1"
+    [ -f "$file" ] || return 1
+    cat "$file"
+}
+
+ensure_daemon() {
+    local pid
+    pid="$(read_pid "$PID_FILE" 2>/dev/null || true)"
+    if is_pid_running "$pid"; then
+        return 0
+    fi
+
+    rm -f "$PID_FILE"
+    "$DAEMON" >/tmp/window-list-overlay.log 2>&1 &
+
+    for _ in $(seq 1 20); do
+        pid="$(read_pid "$PID_FILE" 2>/dev/null || true)"
+        if is_pid_running "$pid"; then
+            return 0
+        fi
+        sleep 0.05
+    done
+
+    return 1
+}
+
 # Cancel any pending hide
-if [ -f /tmp/window-list-hide.pid ]; then
-    kill "$(cat /tmp/window-list-hide.pid)" 2>/dev/null
-    rm -f /tmp/window-list-hide.pid
+hide_pid="$(read_pid "$HIDE_PID_FILE" 2>/dev/null || true)"
+if is_pid_running "$hide_pid"; then
+    kill "$hide_pid" 2>/dev/null
 fi
+rm -f "$HIDE_PID_FILE"
 
 # Cancel any previous pending show
-if [ -f /tmp/window-list-show.pid ]; then
-    kill "$(cat /tmp/window-list-show.pid)" 2>/dev/null
-    rm -f /tmp/window-list-show.pid
+show_pid="$(read_pid "$SHOW_PID_FILE" 2>/dev/null || true)"
+if is_pid_running "$show_pid"; then
+    kill "$show_pid" 2>/dev/null
 fi
+rm -f "$SHOW_PID_FILE"
 
 # Start 200ms debounce timer, then signal the daemon
 (
     sleep 0.2
-    if [ -f /tmp/window-list-overlay.pid ]; then
-        kill -USR1 "$(cat /tmp/window-list-overlay.pid)" 2>/dev/null
+    if ensure_daemon; then
+        pid="$(read_pid "$PID_FILE" 2>/dev/null || true)"
+        if is_pid_running "$pid"; then
+            kill -USR1 "$pid" 2>/dev/null
+        fi
     fi
-    rm -f /tmp/window-list-show.pid
+    rm -f "$SHOW_PID_FILE"
 ) &
-echo $! > /tmp/window-list-show.pid
+echo $! > "$SHOW_PID_FILE"

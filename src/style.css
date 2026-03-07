@@ -15,3 +15,9 @@ window {
 .window-icon {
   margin-right: 12px;
 }
+
+.fade-left,
+.fade-right {
+  min-width: 24px;
+}
+

@@ -1,11 +1,30 @@
 #!/bin/bash
+
+PID_FILE=/tmp/window-list-overlay.pid
+SHOW_PID_FILE=/tmp/window-list-show.pid
+
+read_pid() {
+    local file="$1"
+    [ -f "$file" ] || return 1
+    cat "$file"
+}
+
+is_pid_running() {
+    local pid="$1"
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
 # Cancel any pending show
-if [ -f /tmp/window-list-show.pid ]; then
-    kill "$(cat /tmp/window-list-show.pid)" 2>/dev/null
-    rm -f /tmp/window-list-show.pid
+show_pid="$(read_pid "$SHOW_PID_FILE" 2>/dev/null || true)"
+if is_pid_running "$show_pid"; then
+    kill "$show_pid" 2>/dev/null
 fi
+rm -f "$SHOW_PID_FILE"
 
 # Signal the daemon to hide immediately
-if [ -f /tmp/window-list-overlay.pid ]; then
-    kill -USR2 "$(cat /tmp/window-list-overlay.pid)" 2>/dev/null
+pid="$(read_pid "$PID_FILE" 2>/dev/null || true)"
+if is_pid_running "$pid"; then
+    kill -USR2 "$pid" 2>/dev/null
+else
+    rm -f "$PID_FILE"
 fi

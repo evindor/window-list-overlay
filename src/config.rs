@@ -31,6 +31,19 @@ impl Default for Layout {
     }
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OverflowStyle {
+    Truncate,
+    Scroll,
+}
+
+impl Default for OverflowStyle {
+    fn default() -> Self {
+        Self::Truncate
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default)]
 pub struct MonitorOverride {
@@ -38,6 +51,7 @@ pub struct MonitorOverride {
     pub layout: Option<Layout>,
     pub margin: Option<i32>,
     pub width: Option<i32>,
+    pub max_element_width: Option<i32>,
 }
 
 /// Resolved config for a specific monitor (global defaults + per-monitor overrides merged)
@@ -46,6 +60,7 @@ pub struct EffectiveConfig {
     pub layout: Layout,
     pub margin: i32,
     pub width: i32,
+    pub max_element_width: i32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -62,6 +77,9 @@ pub struct Config {
     pub opacity: f64,
     pub scrolling_only: bool,
     pub max_title_chars: i32,
+    pub max_element_width: i32,
+    pub overflow_style: OverflowStyle,
+    pub scroll_speed: i32,
     #[serde(default)]
     pub monitors: HashMap<String, MonitorOverride>,
 }
@@ -80,6 +98,9 @@ impl Default for Config {
             opacity: 0.92,
             scrolling_only: true,
             max_title_chars: 50,
+            max_element_width: 0,
+            overflow_style: OverflowStyle::default(),
+            scroll_speed: 40,
             monitors: HashMap::new(),
         }
     }
@@ -101,6 +122,9 @@ impl Config {
             width: overrides
                 .and_then(|o| o.width)
                 .unwrap_or(self.width),
+            max_element_width: overrides
+                .and_then(|o| o.max_element_width)
+                .unwrap_or(self.max_element_width),
         }
     }
 }

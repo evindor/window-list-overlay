@@ -36,8 +36,6 @@ fn load_css(provider: &CssProvider, config: &Config) {
 }
 
 fn main() {
-    write_pid_file();
-
     let config = config::load();
 
     let app = gtk4::Application::builder()
@@ -70,6 +68,8 @@ fn main() {
                 o.window.present();
                 o.window.set_visible(false);
             }
+
+            write_pid_file();
 
             // SIGUSR1 → show overlay + start polling timers
             {
